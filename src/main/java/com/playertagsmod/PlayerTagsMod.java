@@ -1,7 +1,6 @@
 package com.playertagsmod;
 
 import com.playertagsmod.command.TagCommand;
-import com.playertagsmod.event.ChatTagHandler;
 import com.playertagsmod.event.JoinTagHandler;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
@@ -14,13 +13,12 @@ public class PlayerTagsMod {
 
     public PlayerTagsMod() {
         NeoForge.EVENT_BUS.register(this);
-        NeoForge.EVENT_BUS.register(new ChatTagHandler());
         NeoForge.EVENT_BUS.register(new JoinTagHandler());
     }
 
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         TagCommand.register(event.getDispatcher());
-        System.out.println("[PlayerTagsMod] Команда /tag зарегистрирована");
+        System.out.println("[PlayerTagsMod] /tag зарегистрирована");
     }
 }
