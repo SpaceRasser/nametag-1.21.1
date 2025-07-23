@@ -19,6 +19,6 @@ public class PlayerTagsMod {
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         TagCommand.register(event.getDispatcher());
-        System.out.println("[PlayerTagsMod] /tag зарегистрирована");
+        System.out.println("[PlayerTagsMod] /tag registered");
     }
 }

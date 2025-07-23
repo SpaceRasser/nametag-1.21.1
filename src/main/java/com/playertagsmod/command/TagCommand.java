@@ -7,39 +7,63 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.TextColor;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.scores.PlayerTeam;
 import net.minecraft.world.scores.Scoreboard;
 
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class TagCommand {
-    // Шаблон градиента: <gradient:#RRGGBB:#RRGGBB>Текст</gradient>
-    private static final Pattern GRADIENT = Pattern.compile(
-            "<gradient:#([0-9A-Fa-f]{6}):#([0-9A-Fa-f]{6})>(.+?)</gradient>"
+    private static final Pattern PAT_GRADIENT = Pattern.compile(
+            "<gradient:#([0-9A-Fa-f]{6}):#([0-9A-Fa-f]{6})>(.*?)</gradient>",
+            Pattern.DOTALL
     );
-    // Шаблон жирного: <bold>Текст</bold>
-    private static final Pattern BOLD = Pattern.compile(
-            "<bold>(.+?)</bold>"
+    private static final Pattern PAT_BOLD = Pattern.compile(
+            "<bold>(.*?)</bold>",
+            Pattern.DOTALL
+    );
+    private static final Pattern PAT_COLOR = Pattern.compile(
+            "<(black|dark_blue|dark_green|dark_aqua|dark_red|dark_purple|gold|gray|dark_gray|blue|green|aqua|red|light_purple|yellow|white)>(.*?)</\\1>",
+            Pattern.DOTALL
     );
 
-    public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
-        dispatcher.register(
+    private static final Map<String, Integer> NAMED_COLORS = Map.ofEntries(
+            Map.entry("black",        0x000000),
+            Map.entry("dark_blue",    0x0000AA),
+            Map.entry("dark_green",   0x00AA00),
+            Map.entry("dark_aqua",    0x00AAAA),
+            Map.entry("dark_red",     0xAA0000),
+            Map.entry("dark_purple",  0xAA00AA),
+            Map.entry("gold",         0xFFAA00),
+            Map.entry("gray",         0xAAAAAA),
+            Map.entry("dark_gray",    0x555555),
+            Map.entry("blue",         0x5555FF),
+            Map.entry("green",        0x55FF55),
+            Map.entry("aqua",         0x55FFFF),
+            Map.entry("red",          0xFF5555),
+            Map.entry("light_purple", 0xFF55FF),
+            Map.entry("yellow",       0xFFFF55),
+            Map.entry("white",        0xFFFFFF)
+    );
+
+    public static void register(CommandDispatcher<CommandSourceStack> disp) {
+        disp.register(
                 Commands.literal("tag")
-                        .requires(src -> src.hasPermission(0)) // без OP
+                        .requires(src -> src.hasPermission(0))
                         .then(Commands.argument("text", StringArgumentType.greedyString())
                                 .executes(ctx -> {
                                     ServerPlayer player = ctx.getSource().getPlayerOrException();
-                                    String rawTag = StringArgumentType.getString(ctx, "text");
+                                    String raw = StringArgumentType.getString(ctx, "text");
 
-                                    applyTagToPlayer(player, rawTag);
-                                    TagStorage.saveTag(player, rawTag);
+                                    MutableComponent comp = parse(raw);
+                                    apply(player, comp);
+                                    TagStorage.saveTag(player, raw);
 
-                                    // превью в чат
-                                    MutableComponent preview = parseTag(rawTag);
                                     ctx.getSource().sendSuccess(
-                                            () -> Component.literal("§aТег установлен: ").append(preview),
+                                            () -> Component.literal("§aTag set: ").append(comp),
                                             false
                                     );
                                     return 1;
@@ -47,11 +71,10 @@ public class TagCommand {
                         .then(Commands.literal("reset")
                                 .executes(ctx -> {
                                     ServerPlayer player = ctx.getSource().getPlayerOrException();
-                                    removeTagFromPlayer(player);
+                                    remove(player);
                                     TagStorage.clearTag(player);
-
                                     ctx.getSource().sendSuccess(
-                                            () -> Component.literal("§eТег сброшен."),
+                                            () -> Component.literal("§eTag cleared."),
                                             false
                                     );
                                     return 1;
@@ -59,63 +82,90 @@ public class TagCommand {
         );
     }
 
-    public static void applyTagToPlayer(ServerPlayer player, String rawTag) {
-        Scoreboard scoreboard = player.getScoreboard();
+    public static void apply(ServerPlayer player, MutableComponent prefix) {
+        Scoreboard sb = player.getScoreboard();
         String teamName = "tag_" + player.getStringUUID().substring(0, 8);
-
-        PlayerTeam team = scoreboard.getPlayerTeam(teamName);
-        if (team == null) {
-            team = scoreboard.addPlayerTeam(teamName);
-        }
-
-        // парсим и добавляем пробел
-        MutableComponent prefix = parseTag(rawTag).append(Component.literal(" "));
-        team.setPlayerPrefix(prefix);
+        PlayerTeam team = sb.getPlayerTeam(teamName);
+        if (team == null) team = sb.addPlayerTeam(teamName);
+        team.setPlayerPrefix(prefix.append(Component.literal(" ")));
         team.setDisplayName(Component.empty());
-        scoreboard.addPlayerToTeam(player.getScoreboardName(), team);
+        sb.addPlayerToTeam(player.getScoreboardName(), team);
     }
 
-    public static void removeTagFromPlayer(ServerPlayer player) {
+    private static void remove(ServerPlayer player) {
         player.getScoreboard().removePlayerFromTeam(player.getScoreboardName());
     }
 
-    /**
-     * Ручной парсер: градиент → символ за символом, или жирный,
-     * иначе plain literal.
-     */
-    public static MutableComponent parseTag(String raw) {
-        Matcher mg = GRADIENT.matcher(raw);
-        if (mg.matches()) {
-            int c1 = Integer.parseInt(mg.group(1), 16);
-            int c2 = Integer.parseInt(mg.group(2), 16);
-            String txt = mg.group(3);
-            MutableComponent out = Component.literal("");
-            int len = txt.length();
-            for (int i = 0; i < len; i++) {
-                double t = len == 1 ? 0.0 : (double)i / (len - 1);
-                int r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
-                int r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
-                int r = (int)Math.round(r1 + (r2 - r1) * t);
-                int g = (int)Math.round(g1 + (g2 - g1) * t);
-                int b = (int)Math.round(b1 + (b2 - b1) * t);
-                int rgb = (r << 16) | (g << 8) | b;
-                out.append(
-                        Component.literal(String.valueOf(txt.charAt(i)))
-                                .withStyle(style -> style.withColor(
-                                        net.minecraft.network.chat.TextColor.fromRgb(rgb)
-                                ))
-                );
+    public static MutableComponent parse(String input) {
+        return parseRec(input);
+    }
+
+    private static MutableComponent parseRec(String input) {
+        MutableComponent result = Component.literal("");
+        int idx = 0;
+        while (idx < input.length()) {
+            Matcher mg = PAT_GRADIENT.matcher(input);
+            Matcher mb = PAT_BOLD.matcher(input);
+            Matcher mc = PAT_COLOR.matcher(input);
+            boolean foundG = mg.find(idx);
+            boolean foundB = mb.find(idx);
+            boolean foundC = mc.find(idx);
+            if (!foundG && !foundB && !foundC) {
+                result.append(Component.literal(input.substring(idx)));
+                break;
             }
-            return out;
-        }
+            int posG = foundG ? mg.start() : Integer.MAX_VALUE;
+            int posB = foundB ? mb.start() : Integer.MAX_VALUE;
+            int posC = foundC ? mc.start() : Integer.MAX_VALUE;
 
-        Matcher mb = BOLD.matcher(raw);
-        if (mb.matches()) {
-            return Component.literal(mb.group(1))
-                    .withStyle(style -> style.withBold(true));
+            if (posG < posB && posG < posC) {
+                // gradient
+                if (mg.start() > idx)
+                    result.append(Component.literal(input.substring(idx, mg.start())));
+                int c1 = Integer.parseInt(mg.group(1), 16);
+                int c2 = Integer.parseInt(mg.group(2), 16);
+                String inner = mg.group(3);
+                result.append(applyGradient(inner, c1, c2));
+                idx = mg.end();
+            } else if (posB < posC) {
+                // bold
+                if (mb.start() > idx)
+                    result.append(Component.literal(input.substring(idx, mb.start())));
+                String inner = mb.group(1);
+                result.append(parseRec(inner).withStyle(s -> s.withBold(true)));
+                idx = mb.end();
+            } else {
+                // named color
+                if (mc.start() > idx)
+                    result.append(Component.literal(input.substring(idx, mc.start())));
+                String tag = mc.group(1);
+                String inner = mc.group(2);
+                result.append(applyColor(inner, NAMED_COLORS.get(tag)));
+                idx = mc.end();
+            }
         }
+        return result;
+    }
 
-        // без тегов
-        return Component.literal(raw);
+    private static MutableComponent applyGradient(String text, int c1, int c2) {
+        MutableComponent comp = Component.literal("");
+        int len = text.length();
+        for (int i = 0; i < len; i++) {
+            double t = len == 1 ? 0 : (double)i / (len - 1);
+            int r = (int)(((c1 >> 16) & 0xFF) * (1 - t) + ((c2 >> 16) & 0xFF) * t);
+            int g = (int)(((c1 >> 8 ) & 0xFF) * (1 - t) + ((c2 >> 8 ) & 0xFF) * t);
+            int b = (int)(((c1      ) & 0xFF) * (1 - t) + ((c2      ) & 0xFF) * t);
+            comp.append(
+                    Component.literal(String.valueOf(text.charAt(i)))
+                            .withStyle(s -> s.withColor(TextColor.fromRgb((r << 16) | (g << 8) | b)))
+            );
+        }
+        return comp;
+    }
+
+    private static MutableComponent applyColor(String text, int color) {
+        return Component.literal(text)
+                .withStyle(s -> s.withColor(TextColor.fromRgb(color)));
+
     }
 }
